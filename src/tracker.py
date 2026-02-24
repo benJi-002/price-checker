@@ -1,5 +1,6 @@
 import time
-from typing import Optional
+from typing import Optional, Tuple, List
+
 from .db import DB, Product
 from .parsers import fetch_price
 from .notifier import send_telegram
@@ -9,20 +10,9 @@ def _fmt_price(p: Optional[float]) -> str:
     return "—" if p is None else f"${p:,.2f}"
 
 
-def _should_notify(product: Product, old: Optional[float], new: float) -> Optional[str]:
-    if old is None:
-        return None
-    if product.notify_below_price is not None and new <= product.notify_below_price:
-        return "below_threshold"
-    if product.notify_on_any_change and new != old:
-        return "changed"
-    return None
-
-
-def _build_msg(product: Product, old: Optional[float], new: float, reason: str) -> str:
-    header = "📉 Цена ниже порога!" if reason == "below_threshold" else "🔔 Цена изменилась"
+def _build_change_msg(product: Product, old: Optional[float], new: float) -> str:
     return (
-        f"{header}\n\n"
+        f"🔔 Цена изменилась\n\n"
         f"{product.name}\n"
         f"Было: {_fmt_price(old)}\n"
         f"Стало: {_fmt_price(new)}\n\n"
@@ -30,21 +20,52 @@ def _build_msg(product: Product, old: Optional[float], new: float, reason: str) 
     )
 
 
-def check_once(db: DB, token: str, chat_id: str, user_agent: str) -> None:
+def check_once(
+    db: DB,
+    token: str,
+    chat_id: str,
+    user_agent: str,
+    notify_on_first_seen: bool = False,
+) -> List[Tuple[Product, Optional[float], Optional[float]]]:
+    """
+    Делает один проход по товарам.
+    Возвращает список (product, old_price, new_price_or_none_if_failed).
+    notify_on_first_seen:
+      - False: при old=None просто сохраняем last_price без уведомлений
+      - True: присылаем уведомление о "первом наблюдении" (обычно не нужно,
+              потому что мы будем слать общий стартовый статус)
+    """
+    results: List[Tuple[Product, Optional[float], Optional[float]]] = []
     products = db.list_active_products()
 
     for p in products:
         price = fetch_price(p.url, user_agent)
+        results.append((p, p.last_price, price))
+
         if price is None:
+            time.sleep(1)
             continue
 
         old = p.last_price
         db.insert_price_history(p.id, price)
 
-        reason = _should_notify(p, old, price)
-        if reason:
-            send_telegram(token, chat_id, _build_msg(p, old, price, reason))
-            db.insert_notification(p.id, old, price, reason)
+        if old is None:
+            # first successful fetch
+            if notify_on_first_seen:
+                send_telegram(
+                    token,
+                    chat_id,
+                    f"📌 Первый замер цены\n\n{p.name}\nТекущая: {_fmt_price(price)}\n\n{p.url}",
+                )
+            db.update_last_price(p.id, price)
+            time.sleep(2)
+            continue
 
-        db.update_last_price(p.id, price)
-        time.sleep(2)  # polite delay
+        if price != old:
+            send_telegram(token, chat_id, _build_change_msg(p, old, price))
+            db.insert_notification(p.id, old, price, "changed")
+            db.update_last_price(p.id, price)
+
+        time.sleep(2)
+
+    return results
