@@ -1,5 +1,7 @@
 import re
 from typing import Optional
+from urllib.parse import urlparse
+
 import requests
 from bs4 import BeautifulSoup
 
@@ -17,26 +19,37 @@ def _normalize_price(raw: str) -> Optional[float]:
         return None
 
 
-def fetch_price(url: str, user_agent: str) -> Optional[float]:
+def _fetch_html(url: str, user_agent: str) -> Optional[str]:
     headers = {
         "User-Agent": user_agent,
         "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
     }
     r = requests.get(url, headers=headers, timeout=25)
     if r.status_code != 200:
         return None
+    return r.text
 
-    html = r.text
+
+def _fetch_price_bestbuy(html: str) -> Optional[float]:
+    """
+    BestBuy иногда рендерит часть через JS, но на sku-страницах
+    цена часто присутствует в сыром HTML как "$1,799.99".
+    Берём наиболее надёжные фоллбеки:
+      1) meta product:price:amount
+      2) известные css-блоки
+      3) regex рядом с "SKU:" или "Sold by Best Buy"
+      4) общий regex по $X,XXX.XX (с ограничением на разумный диапазон)
+    """
     soup = BeautifulSoup(html, "html.parser")
 
-    # Generic attempts
     meta = soup.select_one('meta[property="product:price:amount"]')
     if meta and meta.get("content"):
         p = _normalize_price(meta["content"])
         if p is not None:
             return p
 
-    # Best-effort selectors (can be adjusted per site)
     selectors = [
         ".priceView-customer-price span",
         ".priceView-hero-price span",
@@ -49,12 +62,47 @@ def fetch_price(url: str, user_agent: str) -> Optional[float]:
             if p is not None:
                 return p
 
-    # Fallback: JSON snippets
-    m = re.search(r'"currentPrice"\s*:\s*{[^}]*"price"\s*:\s*([0-9]+(?:\.[0-9]+)?)', html)
+    # regex-фоллбек: ищем $... рядом со SKU или Sold by Best Buy
+    for anchor in ["SKU:", "Sold by Best Buy"]:
+        idx = html.find(anchor)
+        if idx != -1:
+            window = html[idx: idx + 3000]  # небольшой кусок после якоря
+            m = re.search(r"\$([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", window)
+            if m:
+                return float(m.group(1).replace(",", ""))
+
+    # общий фоллбек: первая похожая цена в документе (осторожно)
+    m = re.search(r"\$([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", html)
     if m:
-        try:
-            return float(m.group(1))
-        except ValueError:
-            return None
+        p = float(m.group(1).replace(",", ""))
+        # отсекаем мусор (настрой под себя при желании)
+        if 50 <= p <= 20000:
+            return p
+
+    return None
+
+
+def fetch_price(url: str, user_agent: str) -> Optional[float]:
+    host = urlparse(url).netloc.lower()
+    html = _fetch_html(url, user_agent)
+    if html is None:
+        return None
+
+    if "bestbuy.com" in host:
+        return _fetch_price_bestbuy(html)
+
+    # Generic parsing for other sites
+    soup = BeautifulSoup(html, "html.parser")
+
+    meta = soup.select_one('meta[property="product:price:amount"]')
+    if meta and meta.get("content"):
+        p = _normalize_price(meta["content"])
+        if p is not None:
+            return p
+
+    # basic generic fallback
+    m = re.search(r"\$([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", html)
+    if m:
+        return float(m.group(1).replace(",", ""))
 
     return None
