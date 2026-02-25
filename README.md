@@ -13,7 +13,7 @@ Designed to run on Android (Termux) as a background service.
 7) python -m src.main run
 
 ## Anti-spam and stop behavior
-- Startup message is sent only if there is at least one active product.
+- Startup message is disabled by default (`SEND_STARTUP_MESSAGE=0`). If enabled, it is sent only when at least one price is fetched successfully on startup.
 - Invalid product URLs are blocked on `add`; existing invalid rows are skipped with warning.
 - Service alerts (startup/stop/fatal) are deduplicated with cooldown via `SERVICE_ALERT_COOLDOWN_MINUTES`.
 - If `STOP_ON_EMPTY_PRODUCTS=1`, service sends stop reason to Telegram and exits when no valid active products exist.

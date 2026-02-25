@@ -36,7 +36,7 @@ def load_settings(env_path: str = "config.env") -> Settings:
         check_interval_minutes=int(os.environ.get("CHECK_INTERVAL_MINUTES", "30")),
         db_path=os.environ.get("DB_PATH", "./prices.db"),
         user_agent=os.environ.get("USER_AGENT", "Mozilla/5.0"),
-        send_startup_message=env_bool("SEND_STARTUP_MESSAGE", True),
+        send_startup_message=env_bool("SEND_STARTUP_MESSAGE", False),
         stop_on_empty_products=env_bool("STOP_ON_EMPTY_PRODUCTS", False),
         service_alert_cooldown_minutes=max(
             0,

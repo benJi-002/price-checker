@@ -1,6 +1,7 @@
 import argparse
 import logging
 import time
+from datetime import timezone
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -35,6 +36,10 @@ def _build_startup_message(
             lines.append(f"- {product.name}: {_fmt_price(current_price)}")
 
     return "\n".join(lines)
+
+
+def _has_successful_prices(results: list[tuple[Product, Optional[float], Optional[float]]]) -> bool:
+    return any(current_price is not None for _product, _old_price, current_price in results)
 
 
 def _send_service_alert(db: DB, settings: Settings, event_key: str, message: str) -> bool:
@@ -122,6 +127,7 @@ def cmd_run(db: DB, settings: Settings) -> None:
             logging.error("Stopped because STOP_ON_EMPTY_PRODUCTS=1")
             return
 
+    startup_results: Optional[list[tuple[Product, Optional[float], Optional[float]]]] = None
     if valid_products_count > 0 and settings.send_startup_message:
         try:
             startup_results = check_once(
@@ -141,26 +147,30 @@ def cmd_run(db: DB, settings: Settings) -> None:
             _send_service_alert(db, settings, "service_stopped_startup_error", reason)
             return
 
-        _send_service_alert(
-            db,
-            settings,
-            "service_started",
-            _build_startup_message(settings, startup_results),
-        )
-
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(
-        check_once,
-        "interval",
-        minutes=settings.check_interval_minutes,
-        args=[db, settings.telegram_bot_token, settings.telegram_chat_id, settings.user_agent],
-        max_instances=1,
-        coalesce=True,
-    )
+    scheduler: Optional[BackgroundScheduler] = None
 
     try:
+        scheduler = BackgroundScheduler(timezone=timezone.utc)
+        scheduler.add_job(
+            check_once,
+            "interval",
+            minutes=settings.check_interval_minutes,
+            args=[db, settings.telegram_bot_token, settings.telegram_chat_id, settings.user_agent],
+            max_instances=1,
+            coalesce=True,
+        )
         scheduler.start()
         logging.info("Started. Interval=%d min", settings.check_interval_minutes)
+
+        if startup_results is not None and _has_successful_prices(startup_results):
+            _send_service_alert(
+                db,
+                settings,
+                "service_started",
+                _build_startup_message(settings, startup_results),
+            )
+        elif startup_results is not None:
+            logging.warning("Skipping startup Telegram message: no prices fetched successfully")
 
         while True:
             time.sleep(60)
@@ -175,7 +185,7 @@ def cmd_run(db: DB, settings: Settings) -> None:
         )
         _send_service_alert(db, settings, "service_stopped_runtime_error", reason)
     finally:
-        if getattr(scheduler, "running", False):
+        if scheduler is not None and getattr(scheduler, "running", False):
             scheduler.shutdown(wait=False)
 
 
