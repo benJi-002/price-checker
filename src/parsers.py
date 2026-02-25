@@ -3,7 +3,7 @@ import logging
 import re
 import subprocess
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -197,6 +197,66 @@ def _extract_json_ld_price(soup: BeautifulSoup) -> Optional[float]:
     return None
 
 
+def _extract_ozon_price_from_text(text: str) -> Optional[float]:
+    decimal_patterns = (
+        r"([0-9]{1,3}(?:[ \u00a0][0-9]{3})*(?:[.,][0-9]{2}))\s*(?:BYN|Br|RUB)\b",
+        r"(?:BYN|Br|RUB)\s*([0-9]{1,3}(?:[ \u00a0][0-9]{3})*(?:[.,][0-9]{2}))\b",
+        r'"price"\s*:\s*"([0-9]+(?:[.,][0-9]{1,2})?)"',
+        r'"price"\s*:\s*([0-9]+(?:[.,][0-9]{1,2})?)',
+    )
+    for pattern in decimal_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        p = _normalize_price(match.group(1))
+        if p is not None and 0 < p < 1_000_000:
+            return p
+
+    minor_patterns = (
+        r'"(?:price|finalPrice|cardPrice|salePrice)"\s*:\s*"([0-9]{4,9})"',
+        r'"(?:price|finalPrice|cardPrice|salePrice)"\s*:\s*([0-9]{4,9})',
+    )
+    for pattern in minor_patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            p = _normalize_minor_units(match.group(1))
+            if p is not None and 1 <= p <= 1_000_000:
+                return p
+
+    return None
+
+
+def _fetch_price_ozon_api(url: str, user_agent: str, timeout_seconds: int = 90) -> Optional[float]:
+    parsed = urlparse(url)
+    page_url = parsed.path or "/"
+    if parsed.query:
+        page_url = f"{page_url}?{parsed.query}"
+
+    api_url = f"https://www.ozon.by/api/composer-api.bx/page/json/v2?url={quote(page_url, safe='')}"
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Referer": "https://www.ozon.by/",
+    }
+
+    try:
+        response = requests.get(
+            api_url,
+            headers=headers,
+            timeout=(15, timeout_seconds),
+            allow_redirects=True,
+        )
+    except requests.RequestException:
+        logging.exception("Ozon API fetch failed for %s", url)
+        return None
+
+    if response.status_code != 200:
+        logging.warning("Ozon API returned status=%s for %s", response.status_code, url)
+        return None
+
+    return _extract_ozon_price_from_text(response.text)
+
+
 def _fetch_price_ozon(html: str) -> Optional[float]:
     soup = BeautifulSoup(html, "html.parser")
 
@@ -216,31 +276,7 @@ def _fetch_price_ozon(html: str) -> Optional[float]:
     if p is not None:
         return p
 
-    decimal_patterns = (
-        r"([0-9]{1,3}(?:[ \u00a0][0-9]{3})*(?:[.,][0-9]{2}))\s*(?:BYN|Br|RUB)\b",
-        r"(?:BYN|Br|RUB)\s*([0-9]{1,3}(?:[ \u00a0][0-9]{3})*(?:[.,][0-9]{2}))\b",
-        r'"price"\s*:\s*"([0-9]+(?:[.,][0-9]{1,2})?)"',
-        r'"price"\s*:\s*([0-9]+(?:[.,][0-9]{1,2})?)',
-    )
-    for pattern in decimal_patterns:
-        match = re.search(pattern, html, flags=re.IGNORECASE)
-        if not match:
-            continue
-        p = _normalize_price(match.group(1))
-        if p is not None and 0 < p < 1_000_000:
-            return p
-
-    minor_patterns = (
-        r'"(?:price|finalPrice|cardPrice|salePrice)"\s*:\s*"([0-9]{4,9})"',
-        r'"(?:price|finalPrice|cardPrice|salePrice)"\s*:\s*([0-9]{4,9})',
-    )
-    for pattern in minor_patterns:
-        for match in re.finditer(pattern, html, flags=re.IGNORECASE):
-            p = _normalize_minor_units(match.group(1))
-            if p is not None and 1 <= p <= 1_000_000:
-                return p
-
-    return None
+    return _extract_ozon_price_from_text(html)
 
 
 def _fetch_price_generic(html: str) -> Optional[float]:
@@ -281,11 +317,18 @@ def fetch_price(url: str, user_agent: str, timeout_seconds: int = 90) -> Optiona
     else:
         html = _fetch_html_requests(url, user_agent, timeout_seconds=timeout_seconds)
 
+    if "bestbuy.com" in host:
+        if html is None:
+            return None
+        return _fetch_price_bestbuy(html)
+    if "ozon." in host:
+        if html is not None:
+            price = _fetch_price_ozon(html)
+            if price is not None:
+                return price
+        return _fetch_price_ozon_api(url, user_agent, timeout_seconds=timeout_seconds)
+
     if html is None:
         return None
 
-    if "bestbuy.com" in host:
-        return _fetch_price_bestbuy(html)
-    if "ozon." in host:
-        return _fetch_price_ozon(html)
     return _fetch_price_generic(html)
