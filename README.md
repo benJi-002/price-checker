@@ -14,6 +14,7 @@ Designed to run on Android (Termux) as a background service.
 
 ## Proxy (US route for stores like BestBuy)
 - Set `PROXY_URL` in `config.env` to route product page requests through proxy/VPN endpoint.
+- Increase `FETCH_TIMEOUT_SECONDS` for slow VPN/proxy paths (default is `90`).
 - Set `TELEGRAM_PROXY_URL` only if Telegram should also go through a proxy.
 - Supported by `requests`: HTTP/HTTPS proxy; SOCKS proxy also works when `PySocks` is installed.
 

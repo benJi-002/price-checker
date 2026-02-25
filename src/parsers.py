@@ -25,14 +25,24 @@ def _build_proxies(proxy_url: Optional[str]) -> Optional[dict[str, str]]:
     return {"http": proxy_url, "https": proxy_url}
 
 
-def _fetch_html(url: str, user_agent: str, proxy_url: Optional[str] = None) -> Optional[str]:
+def _fetch_html(
+    url: str,
+    user_agent: str,
+    proxy_url: Optional[str] = None,
+    timeout_seconds: int = 90,
+) -> Optional[str]:
     headers = {
         "User-Agent": user_agent,
         "Accept-Language": "en-US,en;q=0.9",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
     }
-    r = requests.get(url, headers=headers, timeout=25, proxies=_build_proxies(proxy_url))
+    r = requests.get(
+        url,
+        headers=headers,
+        timeout=timeout_seconds,
+        proxies=_build_proxies(proxy_url),
+    )
     if r.status_code != 200:
         return None
     return r.text
@@ -88,9 +98,19 @@ def _fetch_price_bestbuy(html: str) -> Optional[float]:
     return None
 
 
-def fetch_price(url: str, user_agent: str, proxy_url: Optional[str] = None) -> Optional[float]:
+def fetch_price(
+    url: str,
+    user_agent: str,
+    proxy_url: Optional[str] = None,
+    timeout_seconds: int = 90,
+) -> Optional[float]:
     host = urlparse(url).netloc.lower()
-    html = _fetch_html(url, user_agent, proxy_url=proxy_url)
+    html = _fetch_html(
+        url,
+        user_agent,
+        proxy_url=proxy_url,
+        timeout_seconds=timeout_seconds,
+    )
     if html is None:
         return None
 

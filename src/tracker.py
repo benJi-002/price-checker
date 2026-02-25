@@ -35,6 +35,7 @@ def check_once(
     notify_on_first_seen: bool = False,
     fetch_proxy_url: Optional[str] = None,
     telegram_proxy_url: Optional[str] = None,
+    fetch_timeout_seconds: int = 90,
 ) -> List[Tuple[Product, Optional[float], Optional[float]]]:
     """
     Perform one pass over active products.
@@ -55,7 +56,12 @@ def check_once(
             continue
 
         try:
-            price = fetch_price(product.url, user_agent, proxy_url=fetch_proxy_url)
+            price = fetch_price(
+                product.url,
+                user_agent,
+                proxy_url=fetch_proxy_url,
+                timeout_seconds=fetch_timeout_seconds,
+            )
         except Exception:
             logging.exception("Failed to fetch price for product '%s' (%s)", product.name, product.url)
             results.append((product, product.last_price, None))

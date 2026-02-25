@@ -143,6 +143,7 @@ def cmd_run(db: DB, settings: Settings) -> None:
                 notify_on_first_seen=False,
                 fetch_proxy_url=settings.fetch_proxy_url,
                 telegram_proxy_url=settings.telegram_proxy_url,
+                fetch_timeout_seconds=settings.fetch_timeout_seconds,
             )
         except Exception as exc:
             logging.exception("Failed during startup check")
@@ -167,6 +168,7 @@ def cmd_run(db: DB, settings: Settings) -> None:
                 "notify_on_first_seen": False,
                 "fetch_proxy_url": settings.fetch_proxy_url,
                 "telegram_proxy_url": settings.telegram_proxy_url,
+                "fetch_timeout_seconds": settings.fetch_timeout_seconds,
             },
             max_instances=1,
             coalesce=True,
