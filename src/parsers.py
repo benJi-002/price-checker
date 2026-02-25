@@ -1,4 +1,5 @@
 import re
+import subprocess
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -19,7 +20,7 @@ def _normalize_price(raw: str) -> Optional[float]:
         return None
 
 
-def _fetch_html(
+def _fetch_html_requests(
     url: str,
     user_agent: str,
     timeout_seconds: int = 90,
@@ -33,23 +34,60 @@ def _fetch_html(
     r = requests.get(
         url,
         headers=headers,
-        timeout=timeout_seconds,
+        timeout=(15, timeout_seconds),  # connect, read
+        allow_redirects=True,
     )
     if r.status_code != 200:
         return None
     return r.text
 
 
+def _fetch_html_bestbuy_curl(
+    url: str,
+    user_agent: str,
+    timeout_seconds: int = 90,
+) -> Optional[str]:
+    """
+    BestBuy + VPN: curl --http1.1 стабильно работает, requests иногда получает
+    RemoteDisconnected. Поэтому транспорт для BestBuy делаем через curl.
+    """
+    cmd = [
+        "curl",
+        "--http1.1",
+        "-L",
+        "--connect-timeout",
+        "15",
+        "--max-time",
+        str(timeout_seconds),
+        "-H",
+        f"User-Agent: {user_agent}",
+        "-H",
+        "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "-H",
+        "Accept-Language: en-US,en;q=0.9",
+        "-H",
+        "Cache-Control: no-cache",
+        "-H",
+        "Pragma: no-cache",
+        url,
+    ]
+
+    try:
+        p = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if p.returncode != 0:
+            # если хочешь — можно логировать p.stderr
+            return None
+        return p.stdout
+    except Exception:
+        return None
+
+
 def _fetch_price_bestbuy(html: str) -> Optional[float]:
-    """
-    BestBuy иногда рендерит часть через JS, но на sku-страницах
-    цена часто присутствует в сыром HTML как "$1,799.99".
-    Берём наиболее надёжные фоллбеки:
-      1) meta product:price:amount
-      2) известные css-блоки
-      3) regex рядом с "SKU:" или "Sold by Best Buy"
-      4) общий regex по $X,XXX.XX (с ограничением на разумный диапазон)
-    """
     soup = BeautifulSoup(html, "html.parser")
 
     meta = soup.select_one('meta[property="product:price:amount"]')
@@ -70,20 +108,17 @@ def _fetch_price_bestbuy(html: str) -> Optional[float]:
             if p is not None:
                 return p
 
-    # regex-фоллбек: ищем $... рядом со SKU или Sold by Best Buy
     for anchor in ["SKU:", "Sold by Best Buy"]:
         idx = html.find(anchor)
         if idx != -1:
-            window = html[idx: idx + 3000]  # небольшой кусок после якоря
+            window = html[idx : idx + 3000]
             m = re.search(r"\$([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", window)
             if m:
                 return float(m.group(1).replace(",", ""))
 
-    # общий фоллбек: первая похожая цена в документе (осторожно)
     m = re.search(r"\$([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", html)
     if m:
         p = float(m.group(1).replace(",", ""))
-        # отсекаем мусор (настрой под себя при желании)
         if 50 <= p <= 20000:
             return p
 
@@ -96,18 +131,18 @@ def fetch_price(
     timeout_seconds: int = 90,
 ) -> Optional[float]:
     host = urlparse(url).netloc.lower()
-    html = _fetch_html(
-        url,
-        user_agent,
-        timeout_seconds=timeout_seconds,
-    )
+
+    if "bestbuy.com" in host:
+        html = _fetch_html_bestbuy_curl(url, user_agent, timeout_seconds=timeout_seconds)
+    else:
+        html = _fetch_html_requests(url, user_agent, timeout_seconds=timeout_seconds)
+
     if html is None:
         return None
 
     if "bestbuy.com" in host:
         return _fetch_price_bestbuy(html)
 
-    # Generic parsing for other sites
     soup = BeautifulSoup(html, "html.parser")
 
     meta = soup.select_one('meta[property="product:price:amount"]')
@@ -116,7 +151,6 @@ def fetch_price(
         if p is not None:
             return p
 
-    # basic generic fallback
     m = re.search(r"\$([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", html)
     if m:
         return float(m.group(1).replace(",", ""))
