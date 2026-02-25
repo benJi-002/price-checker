@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import subprocess
 from typing import Optional
@@ -17,7 +18,7 @@ def _normalize_price(raw: str) -> Optional[float]:
     if not s:
         return None
 
-    # Normalize decimal/thousand separators for formats like:
+    # Handle mixed thousand and decimal separators:
     # 1,234.56 | 1.234,56 | 124,91 | 124.91
     if "," in s and "." in s:
         if s.rfind(",") > s.rfind("."):
@@ -43,40 +44,55 @@ def _normalize_price(raw: str) -> Optional[float]:
         return None
 
 
-def _fetch_html_requests(
-    url: str,
-    user_agent: str,
-    timeout_seconds: int = 90,
-) -> Optional[str]:
+def _normalize_minor_units(raw: str) -> Optional[float]:
+    digits = re.sub(r"\D", "", raw or "")
+    if not digits:
+        return None
+
+    value = int(digits)
+    if value <= 0:
+        return None
+
+    # Ozon JSON can expose minor units (e.g. 12491 -> 124.91).
+    if value >= 1000:
+        return value / 100.0
+    return float(value)
+
+
+def _fetch_html_requests(url: str, user_agent: str, timeout_seconds: int = 90) -> Optional[str]:
     headers = {
         "User-Agent": user_agent,
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
     }
-    r = requests.get(
-        url,
-        headers=headers,
-        timeout=(15, timeout_seconds),  # connect, read
-        allow_redirects=True,
-    )
-    if r.status_code != 200:
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=(15, timeout_seconds),
+            allow_redirects=True,
+        )
+    except requests.RequestException:
+        logging.exception("requests fetch failed for %s", url)
         return None
-    return r.text
+
+    if response.status_code != 200:
+        logging.warning("Fetch failed for %s: status=%s", url, response.status_code)
+        return None
+
+    return response.text
 
 
-def _fetch_html_bestbuy_curl(
+def _fetch_html_curl(
     url: str,
     user_agent: str,
     timeout_seconds: int = 90,
+    force_http11: bool = True,
 ) -> Optional[str]:
-    """
-    BestBuy + VPN: curl --http1.1 стабильно работает, requests иногда получает
-    RemoteDisconnected. Поэтому транспорт для BestBuy делаем через curl.
-    """
     cmd = [
         "curl",
-        "--http1.1",
         "-L",
         "--connect-timeout",
         "15",
@@ -87,27 +103,33 @@ def _fetch_html_bestbuy_curl(
         "-H",
         "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "-H",
-        "Accept-Language: en-US,en;q=0.9",
+        "Accept-Language: ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
         "-H",
         "Cache-Control: no-cache",
         "-H",
         "Pragma: no-cache",
         url,
     ]
+    if force_http11:
+        cmd.insert(1, "--http1.1")
 
     try:
-        p = subprocess.run(
+        proc = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
         )
-        if p.returncode != 0:
-            # если хочешь — можно логировать p.stderr
-            return None
-        return p.stdout
     except Exception:
+        logging.exception("curl fetch crashed for %s", url)
         return None
+
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()
+        logging.warning("curl fetch failed for %s: %s", url, stderr[:300])
+        return None
+
+    return proc.stdout
 
 
 def _fetch_price_bestbuy(html: str) -> Optional[float]:
@@ -124,8 +146,8 @@ def _fetch_price_bestbuy(html: str) -> Optional[float]:
         ".priceView-hero-price span",
         "[data-testid='customer-price']",
     ]
-    for sel in selectors:
-        el = soup.select_one(sel)
+    for selector in selectors:
+        el = soup.select_one(selector)
         if el:
             p = _normalize_price(el.get_text(" ", strip=True))
             if p is not None:
@@ -135,15 +157,15 @@ def _fetch_price_bestbuy(html: str) -> Optional[float]:
         idx = html.find(anchor)
         if idx != -1:
             window = html[idx : idx + 3000]
-            m = re.search(r"\$([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", window)
-            if m:
-                return float(m.group(1).replace(",", ""))
+            match = re.search(r"\$([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", window)
+            if match:
+                return float(match.group(1).replace(",", ""))
 
-    m = re.search(r"\$([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", html)
-    if m:
-        p = float(m.group(1).replace(",", ""))
-        if 50 <= p <= 20000:
-            return p
+    match = re.search(r"\$([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", html)
+    if match:
+        price = float(match.group(1).replace(",", ""))
+        if 50 <= price <= 20000:
+            return price
 
     return None
 
@@ -162,7 +184,6 @@ def _extract_json_ld_price(soup: BeautifulSoup) -> Optional[float]:
         stack = [data]
         while stack:
             node = stack.pop()
-
             if isinstance(node, dict):
                 for key in ("price", "lowPrice", "highPrice"):
                     if key in node:
@@ -195,20 +216,29 @@ def _fetch_price_ozon(html: str) -> Optional[float]:
     if p is not None:
         return p
 
-    # Common Ozon money formats in HTML: "124,91 Br", "BYN 124,91"
-    patterns = (
-        r"([0-9]{1,3}(?:[ \u00a0][0-9]{3})*(?:[.,][0-9]{2}))\s*(?:BYN|Br)\b",
-        r"(?:BYN|Br)\s*([0-9]{1,3}(?:[ \u00a0][0-9]{3})*(?:[.,][0-9]{2}))\b",
+    decimal_patterns = (
+        r"([0-9]{1,3}(?:[ \u00a0][0-9]{3})*(?:[.,][0-9]{2}))\s*(?:BYN|Br|RUB)\b",
+        r"(?:BYN|Br|RUB)\s*([0-9]{1,3}(?:[ \u00a0][0-9]{3})*(?:[.,][0-9]{2}))\b",
         r'"price"\s*:\s*"([0-9]+(?:[.,][0-9]{1,2})?)"',
         r'"price"\s*:\s*([0-9]+(?:[.,][0-9]{1,2})?)',
     )
-    for pattern in patterns:
-        m = re.search(pattern, html, flags=re.IGNORECASE)
-        if not m:
+    for pattern in decimal_patterns:
+        match = re.search(pattern, html, flags=re.IGNORECASE)
+        if not match:
             continue
-        p = _normalize_price(m.group(1))
+        p = _normalize_price(match.group(1))
         if p is not None and 0 < p < 1_000_000:
             return p
+
+    minor_patterns = (
+        r'"(?:price|finalPrice|cardPrice|salePrice)"\s*:\s*"([0-9]{4,9})"',
+        r'"(?:price|finalPrice|cardPrice|salePrice)"\s*:\s*([0-9]{4,9})',
+    )
+    for pattern in minor_patterns:
+        for match in re.finditer(pattern, html, flags=re.IGNORECASE):
+            p = _normalize_minor_units(match.group(1))
+            if p is not None and 1 <= p <= 1_000_000:
+                return p
 
     return None
 
@@ -232,23 +262,22 @@ def _fetch_price_generic(html: str) -> Optional[float]:
     if p is not None:
         return p
 
-    # Keep USD fallback for legacy behavior.
-    m = re.search(r"\$([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", html)
-    if m:
-        return float(m.group(1).replace(",", ""))
+    match = re.search(r"\$([0-9]{1,3}(?:,[0-9]{3})*\.[0-9]{2})", html)
+    if match:
+        return float(match.group(1).replace(",", ""))
 
     return None
 
 
-def fetch_price(
-    url: str,
-    user_agent: str,
-    timeout_seconds: int = 90,
-) -> Optional[float]:
+def fetch_price(url: str, user_agent: str, timeout_seconds: int = 90) -> Optional[float]:
     host = urlparse(url).netloc.lower()
 
     if "bestbuy.com" in host:
-        html = _fetch_html_bestbuy_curl(url, user_agent, timeout_seconds=timeout_seconds)
+        html = _fetch_html_curl(url, user_agent, timeout_seconds=timeout_seconds, force_http11=True)
+    elif "ozon." in host:
+        html = _fetch_html_requests(url, user_agent, timeout_seconds=timeout_seconds)
+        if html is None:
+            html = _fetch_html_curl(url, user_agent, timeout_seconds=timeout_seconds, force_http11=True)
     else:
         html = _fetch_html_requests(url, user_agent, timeout_seconds=timeout_seconds)
 
