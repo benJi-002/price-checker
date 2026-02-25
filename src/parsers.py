@@ -231,7 +231,12 @@ def _fetch_price_ozon_api(url: str, user_agent: str, timeout_seconds: int = 90) 
     if parsed.query:
         page_url = f"{page_url}?{parsed.query}"
 
-    api_url = f"https://www.ozon.by/api/composer-api.bx/page/json/v2?url={quote(page_url, safe='')}"
+    encoded_page_url = quote(page_url, safe="")
+    api_urls = [
+        # Ozon often requires __rr=1 for anti-bot redirect handshake.
+        f"https://www.ozon.by/api/composer-api.bx/page/json/v2?url={encoded_page_url}&__rr=1",
+        f"https://www.ozon.by/api/composer-api.bx/page/json/v2?url={encoded_page_url}",
+    ]
     headers = {
         "User-Agent": user_agent,
         "Accept": "application/json, text/plain, */*",
@@ -239,22 +244,28 @@ def _fetch_price_ozon_api(url: str, user_agent: str, timeout_seconds: int = 90) 
         "Referer": "https://www.ozon.by/",
     }
 
-    try:
-        response = requests.get(
-            api_url,
-            headers=headers,
-            timeout=(15, timeout_seconds),
-            allow_redirects=True,
-        )
-    except requests.RequestException:
-        logging.exception("Ozon API fetch failed for %s", url)
-        return None
+    session = requests.Session()
+    for api_url in api_urls:
+        try:
+            response = session.get(
+                api_url,
+                headers=headers,
+                timeout=(15, timeout_seconds),
+                allow_redirects=True,
+            )
+        except requests.RequestException:
+            logging.exception("Ozon API fetch failed for %s", url)
+            continue
 
-    if response.status_code != 200:
-        logging.warning("Ozon API returned status=%s for %s", response.status_code, url)
-        return None
+        if response.status_code != 200:
+            logging.warning("Ozon API returned status=%s for %s", response.status_code, url)
+            continue
 
-    return _extract_ozon_price_from_text(response.text)
+        price = _extract_ozon_price_from_text(response.text)
+        if price is not None:
+            return price
+
+    return None
 
 
 def _fetch_price_ozon(html: str) -> Optional[float]:
@@ -311,9 +322,8 @@ def fetch_price(url: str, user_agent: str, timeout_seconds: int = 90) -> Optiona
     if "bestbuy.com" in host:
         html = _fetch_html_curl(url, user_agent, timeout_seconds=timeout_seconds, force_http11=True)
     elif "ozon." in host:
+        # Ozon + Termux VPN: curl may get redirect loops. Prefer requests + API fallback.
         html = _fetch_html_requests(url, user_agent, timeout_seconds=timeout_seconds)
-        if html is None:
-            html = _fetch_html_curl(url, user_agent, timeout_seconds=timeout_seconds, force_http11=True)
     else:
         html = _fetch_html_requests(url, user_agent, timeout_seconds=timeout_seconds)
 
