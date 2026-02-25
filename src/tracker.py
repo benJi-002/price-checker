@@ -1,5 +1,7 @@
+import logging
 import time
 from typing import Optional, Tuple, List
+from urllib.parse import urlparse
 
 from .db import DB, Product
 from .parsers import fetch_price
@@ -8,6 +10,11 @@ from .notifier import send_telegram
 
 def _fmt_price(p: Optional[float]) -> str:
     return "—" if p is None else f"${p:,.2f}"
+
+
+def _is_valid_product_url(url: str) -> bool:
+    parsed = urlparse(url.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
 def _build_change_msg(product: Product, old: Optional[float], new: float) -> str:
@@ -39,7 +46,20 @@ def check_once(
     products = db.list_active_products()
 
     for p in products:
-        price = fetch_price(p.url, user_agent)
+        if not _is_valid_product_url(p.url):
+            logging.warning("Skipping product '%s' due to invalid URL: %s", p.name, p.url)
+            results.append((p, p.last_price, None))
+            time.sleep(1)
+            continue
+
+        try:
+            price = fetch_price(p.url, user_agent)
+        except Exception:
+            logging.exception("Failed to fetch price for product '%s' (%s)", p.name, p.url)
+            results.append((p, p.last_price, None))
+            time.sleep(1)
+            continue
+
         results.append((p, p.last_price, price))
 
         if price is None:

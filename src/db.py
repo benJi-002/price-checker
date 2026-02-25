@@ -63,6 +63,18 @@ class DB:
                 FOREIGN KEY(product_id) REFERENCES products(id)
             );
             """)
+            conn.execute("""
+            CREATE TABLE IF NOT EXISTS service_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_key TEXT NOT NULL,
+                message TEXT NOT NULL,
+                sent_at TEXT NOT NULL
+            );
+            """)
+            conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_service_events_key_sent_at
+            ON service_events(event_key, sent_at DESC);
+            """)
             conn.commit()
 
     def add_product(self, name: str, url: str, threshold: Optional[float]) -> None:
@@ -120,5 +132,42 @@ class DB:
             conn.execute(
                 "INSERT INTO notifications (product_id, old_price, new_price, reason, sent_at) VALUES (?, ?, ?, ?, ?)",
                 (product_id, old_price, new_price, reason, utc_now_iso()),
+            )
+            conn.commit()
+
+    def should_send_service_event(self, event_key: str, cooldown_seconds: int) -> bool:
+        if cooldown_seconds <= 0:
+            return True
+
+        with self._conn() as conn:
+            row = conn.execute(
+                """
+                SELECT sent_at
+                FROM service_events
+                WHERE event_key=?
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (event_key,),
+            ).fetchone()
+
+        if row is None:
+            return True
+
+        try:
+            last_sent = datetime.fromisoformat(row["sent_at"])
+            if last_sent.tzinfo is None:
+                last_sent = last_sent.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            return True
+
+        age_seconds = (datetime.now(timezone.utc) - last_sent).total_seconds()
+        return age_seconds >= cooldown_seconds
+
+    def record_service_event(self, event_key: str, message: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT INTO service_events (event_key, message, sent_at) VALUES (?, ?, ?)",
+                (event_key, message, utc_now_iso()),
             )
             conn.commit()
