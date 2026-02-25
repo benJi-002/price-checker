@@ -60,7 +60,12 @@ def _send_service_alert(db: DB, settings: Settings, event_key: str, message: str
         return False
 
     try:
-        send_telegram(settings.telegram_bot_token, settings.telegram_chat_id, message)
+        send_telegram(
+            settings.telegram_bot_token,
+            settings.telegram_chat_id,
+            message,
+            proxy_url=settings.telegram_proxy_url,
+        )
     except Exception:
         logging.exception("Failed to send service alert '%s'", event_key)
         return False
@@ -136,6 +141,8 @@ def cmd_run(db: DB, settings: Settings) -> None:
                 settings.telegram_chat_id,
                 settings.user_agent,
                 notify_on_first_seen=False,
+                fetch_proxy_url=settings.fetch_proxy_url,
+                telegram_proxy_url=settings.telegram_proxy_url,
             )
         except Exception as exc:
             logging.exception("Failed during startup check")
@@ -156,6 +163,11 @@ def cmd_run(db: DB, settings: Settings) -> None:
             "interval",
             minutes=settings.check_interval_minutes,
             args=[db, settings.telegram_bot_token, settings.telegram_chat_id, settings.user_agent],
+            kwargs={
+                "notify_on_first_seen": False,
+                "fetch_proxy_url": settings.fetch_proxy_url,
+                "telegram_proxy_url": settings.telegram_proxy_url,
+            },
             max_instances=1,
             coalesce=True,
         )

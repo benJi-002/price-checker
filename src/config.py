@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import Optional
 from dotenv import load_dotenv
 
 
@@ -10,6 +11,8 @@ class Settings:
     check_interval_minutes: int
     db_path: str
     user_agent: str
+    fetch_proxy_url: Optional[str]
+    telegram_proxy_url: Optional[str]
     send_startup_message: bool
     stop_on_empty_products: bool
     service_alert_cooldown_minutes: int
@@ -30,12 +33,18 @@ def load_settings(env_path: str = "config.env") -> Settings:
             return default
         return raw.strip().lower() in {"1", "true", "yes", "on"}
 
+    def env_optional_str(name: str) -> Optional[str]:
+        raw = os.environ.get(name, "").strip()
+        return raw or None
+
     return Settings(
         telegram_bot_token=token,
         telegram_chat_id=chat_id,
         check_interval_minutes=int(os.environ.get("CHECK_INTERVAL_MINUTES", "30")),
         db_path=os.environ.get("DB_PATH", "./prices.db"),
         user_agent=os.environ.get("USER_AGENT", "Mozilla/5.0"),
+        fetch_proxy_url=env_optional_str("PROXY_URL"),
+        telegram_proxy_url=env_optional_str("TELEGRAM_PROXY_URL"),
         send_startup_message=env_bool("SEND_STARTUP_MESSAGE", False),
         stop_on_empty_products=env_bool("STOP_ON_EMPTY_PRODUCTS", False),
         service_alert_cooldown_minutes=max(
