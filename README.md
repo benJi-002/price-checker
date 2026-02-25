@@ -12,11 +12,9 @@ Designed to run on Android (Termux) as a background service.
 6) python -m src.main add "Item name" "https://..." --threshold 299.99
 7) python -m src.main run
 
-## Proxy (US route for stores like BestBuy)
-- Set `PROXY_URL` in `config.env` to route product page requests through proxy/VPN endpoint.
-- Increase `FETCH_TIMEOUT_SECONDS` for slow VPN/proxy paths (default is `90`).
-- Set `TELEGRAM_PROXY_URL` only if Telegram should also go through a proxy.
-- Supported by `requests`: HTTP/HTTPS proxy; SOCKS proxy also works when `PySocks` is installed.
+## Network
+- Run tracker under system VPN (for example, Surfshark) if regional routing is needed.
+- Increase `FETCH_TIMEOUT_SECONDS` for slow VPN paths (default is `90`).
 
 ## Anti-spam and stop behavior
 - Startup message is disabled by default (`SEND_STARTUP_MESSAGE=0`). If enabled, it is sent only when at least one price is fetched successfully on startup.

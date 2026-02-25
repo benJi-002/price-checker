@@ -19,16 +19,9 @@ def _normalize_price(raw: str) -> Optional[float]:
         return None
 
 
-def _build_proxies(proxy_url: Optional[str]) -> Optional[dict[str, str]]:
-    if not proxy_url:
-        return None
-    return {"http": proxy_url, "https": proxy_url}
-
-
 def _fetch_html(
     url: str,
     user_agent: str,
-    proxy_url: Optional[str] = None,
     timeout_seconds: int = 90,
 ) -> Optional[str]:
     headers = {
@@ -41,7 +34,6 @@ def _fetch_html(
         url,
         headers=headers,
         timeout=timeout_seconds,
-        proxies=_build_proxies(proxy_url),
     )
     if r.status_code != 200:
         return None
@@ -101,14 +93,12 @@ def _fetch_price_bestbuy(html: str) -> Optional[float]:
 def fetch_price(
     url: str,
     user_agent: str,
-    proxy_url: Optional[str] = None,
     timeout_seconds: int = 90,
 ) -> Optional[float]:
     host = urlparse(url).netloc.lower()
     html = _fetch_html(
         url,
         user_agent,
-        proxy_url=proxy_url,
         timeout_seconds=timeout_seconds,
     )
     if html is None:

@@ -1,6 +1,5 @@
 import os
 from dataclasses import dataclass
-from typing import Optional
 from dotenv import load_dotenv
 
 
@@ -11,8 +10,6 @@ class Settings:
     check_interval_minutes: int
     db_path: str
     user_agent: str
-    fetch_proxy_url: Optional[str]
-    telegram_proxy_url: Optional[str]
     fetch_timeout_seconds: int
     send_startup_message: bool
     stop_on_empty_products: bool
@@ -34,10 +31,6 @@ def load_settings(env_path: str = "config.env") -> Settings:
             return default
         return raw.strip().lower() in {"1", "true", "yes", "on"}
 
-    def env_optional_str(name: str) -> Optional[str]:
-        raw = os.environ.get(name, "").strip()
-        return raw or None
-
     def env_int(name: str, default: int, minimum: int = 0) -> int:
         raw = os.environ.get(name)
         if raw is None or not raw.strip():
@@ -52,8 +45,6 @@ def load_settings(env_path: str = "config.env") -> Settings:
         check_interval_minutes=env_int("CHECK_INTERVAL_MINUTES", 30, minimum=1),
         db_path=os.environ.get("DB_PATH", "./prices.db"),
         user_agent=os.environ.get("USER_AGENT", "Mozilla/5.0"),
-        fetch_proxy_url=env_optional_str("PROXY_URL"),
-        telegram_proxy_url=env_optional_str("TELEGRAM_PROXY_URL"),
         fetch_timeout_seconds=env_int("FETCH_TIMEOUT_SECONDS", 90, minimum=10),
         send_startup_message=env_bool("SEND_STARTUP_MESSAGE", False),
         stop_on_empty_products=env_bool("STOP_ON_EMPTY_PRODUCTS", False),

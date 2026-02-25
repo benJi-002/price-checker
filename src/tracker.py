@@ -33,8 +33,6 @@ def check_once(
     chat_id: str,
     user_agent: str,
     notify_on_first_seen: bool = False,
-    fetch_proxy_url: Optional[str] = None,
-    telegram_proxy_url: Optional[str] = None,
     fetch_timeout_seconds: int = 90,
 ) -> List[Tuple[Product, Optional[float], Optional[float]]]:
     """
@@ -59,7 +57,6 @@ def check_once(
             price = fetch_price(
                 product.url,
                 user_agent,
-                proxy_url=fetch_proxy_url,
                 timeout_seconds=fetch_timeout_seconds,
             )
         except Exception:
@@ -88,7 +85,6 @@ def check_once(
                         f"Current: {_fmt_price(price)}\n\n"
                         f"{product.url}"
                     ),
-                    proxy_url=telegram_proxy_url,
                 )
             db.update_last_price(product.id, price)
             time.sleep(2)
@@ -99,7 +95,6 @@ def check_once(
                 token,
                 chat_id,
                 _build_change_msg(product, old, price),
-                proxy_url=telegram_proxy_url,
             )
             db.insert_notification(product.id, old, price, "changed")
             db.update_last_price(product.id, price)
